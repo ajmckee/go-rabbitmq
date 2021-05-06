@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/streadway/amqp"
 )
@@ -41,8 +42,18 @@ type PublishOptions struct {
 	// Transient or Persistent
 	DeliveryMode uint8
 	// Expiration time in ms a message will expire from a queue.
-	Expiration		string
-	Headers      Table
+	Expiration string
+	// Headers
+	Headers Table
+	Priority uint8
+	MessageId string
+	CorrelationId string
+	ReplyTo string
+	Timestamp time.Time
+	Type string
+	UserId string
+	AppId string
+	ContentEncoding string
 }
 
 // WithPublishOptionsExchange returns a function that sets the exchange to publish to
@@ -91,6 +102,69 @@ func WithPublishOptionsExpiration (expiration string) func(options *PublishOptio
 func WithPublishOptionsHeaders(headers Table) func(*PublishOptions) {
 	return func(options *PublishOptions) {
 		options.Headers = headers
+	}
+}
+
+// WithPublishOptionsMessageId returns a function that adds a message identifier
+func WithPublishOptionsMessageId (messageId string) func(*PublishOptions) {
+	return func(options *PublishOptions) {
+		options.MessageId = messageId
+	}
+}
+
+// WithPublishOptionsCorrelationId returns a function that adds a CorrelationId to a message
+func WithPublishOptionsCorrelationId(correlationId string) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.CorrelationId = correlationId
+	}
+}
+
+// WithPublishOptionsReplyTo returns a function that adds a replyTo to message properties
+func WithPublishOptionsReplyTo(replyTo string) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.ReplyTo = replyTo
+	}
+}
+
+// WithPublishOptionsTimestamp returns a function that adds a timestamp to a message properties
+func WithPublishOptionsTimestamp(timestamp time.Time) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.Timestamp = timestamp
+	}
+}
+
+// WithPublishOptionsType returns a function that adds a message type to the message properties
+func WithPublishOptionsType(messageType string) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.Type = messageType
+	}
+}
+
+// WithPublishOptionsUserId returns a function that adds a UserId type to the message properties
+func WithPublishOptionsUserId(uid string) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.UserId = uid
+	}
+}
+
+// WithPublishOptionsAppId returns a function that adds a AppId type to the message properties
+func WithPublishOptionsAppId(appid string) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.AppId = appid
+	}
+}
+
+// WithPublishOptionsPriority returns a function that adds a Priority type to the message properties
+func WithPublishOptionsPriority(priority uint8) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.Priority = priority
+	}
+}
+
+// WithPublishOptionsContentEncoding returns a function that adds a ContentEncoding type to the message properties
+func WithPublishOptionsContentEncoding(encoding string) func(options *PublishOptions) {
+	return func(options *PublishOptions) {
+		options.ContentEncoding = encoding
 	}
 }
 
@@ -189,6 +263,7 @@ func (publisher *Publisher) Publish(
 	for _, optionFunc := range optionFuncs {
 		optionFunc(options)
 	}
+
 	if options.DeliveryMode == 0 {
 		options.DeliveryMode = Transient
 	}
@@ -209,6 +284,17 @@ func (publisher *Publisher) Publish(
 		if options.Expiration != "" {
 			message.Expiration = options.Expiration
 		}
+
+		// Other message properties that may be added, prob should be conditionally added.
+		message.ContentEncoding = options.ContentEncoding
+		message.MessageId = options.MessageId
+		message.CorrelationId = options.CorrelationId
+		message.Priority = options.Priority
+		message.Type = options.Type
+		message.ReplyTo = options.ReplyTo
+		message.Timestamp = options.Timestamp
+		message.UserId = options.UserId
+		message.AppId = options.AppId
 
 		// Actual publish.
 		err := publisher.chManager.channel.Publish(

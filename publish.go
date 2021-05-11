@@ -44,15 +44,15 @@ type PublishOptions struct {
 	// Expiration time in ms a message will expire from a queue.
 	Expiration string
 	// Headers
-	Headers Table
-	Priority uint8
-	MessageId string
-	CorrelationId string
-	ReplyTo string
-	Timestamp time.Time
-	Type string
-	UserId string
-	AppId string
+	Headers         Table
+	Priority        uint8
+	MessageId       string
+	CorrelationId   string
+	ReplyTo         string
+	Timestamp       time.Time
+	Type            string
+	UserId          string
+	AppId           string
 	ContentEncoding string
 }
 
@@ -92,7 +92,7 @@ func WithPublishOptionsPersistentDelivery(options *PublishOptions) {
 
 // WithPublishOptionsExpiration returns a function that sets the expiry/TTL of a message. As per RabbitMq spec, it must be a
 // string value in milliseconds.
-func WithPublishOptionsExpiration (expiration string) func(options *PublishOptions) {
+func WithPublishOptionsExpiration(expiration string) func(options *PublishOptions) {
 	return func(options *PublishOptions) {
 		options.Expiration = expiration
 	}
@@ -106,7 +106,7 @@ func WithPublishOptionsHeaders(headers Table) func(*PublishOptions) {
 }
 
 // WithPublishOptionsMessageId returns a function that adds a message identifier
-func WithPublishOptionsMessageId (messageId string) func(*PublishOptions) {
+func WithPublishOptionsMessageId(messageId string) func(*PublishOptions) {
 	return func(options *PublishOptions) {
 		options.MessageId = messageId
 	}
@@ -303,7 +303,7 @@ func (publisher *Publisher) Publish(
 			options.Mandatory,
 			options.Immediate,
 			message,
-			)
+		)
 		if err != nil {
 			return err
 		}

@@ -17,8 +17,8 @@ func (c *customLogger) Printf(fmt string, args ...interface{}) {
 func main() {
 	mylogger := &customLogger{}
 
-	publisher, returns, err := rabbitmq.NewPublisher(
-		"amqp://guest:guest@localhost",
+	publisher, err := rabbitmq.NewPublisher(
+		"amqp://guest:guest@localhost", rabbitmq.Config{},
 		rabbitmq.WithPublisherOptionsLogger(mylogger),
 	)
 	if err != nil {
@@ -36,6 +36,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	returns := publisher.NotifyReturn()
 	go func() {
 		for r := range returns {
 			log.Printf("message returned from server: %s", string(r.Body))

@@ -1,11 +1,7 @@
-all: test fmt vet lint staticcheck
+all: test vet lint staticcheck
 
 test:
 	go test ./...
-
-fmt:
-	go list -f '{{.Dir}}' ./... | grep -v /vendor/ | xargs -L1 gofmt -l
-	test -z $$(go list -f '{{.Dir}}' ./... | grep -v /vendor/ | xargs -L1 gofmt -l)
 
 vet:
 	go vet ./...
@@ -21,4 +17,4 @@ install-staticcheck:
 	cd /tmp && GOPROXY="" go get honnef.co/go/tools/cmd/staticcheck
 
 staticcheck:
-	staticcheck -f stylish ./...
+	staticcheck ./...

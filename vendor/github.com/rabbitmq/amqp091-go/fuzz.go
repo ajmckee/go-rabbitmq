@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build gofuzz
 // +build gofuzz
 
 package amqp091
@@ -10,7 +11,7 @@ package amqp091
 import "bytes"
 
 func Fuzz(data []byte) int {
-	r := reader{bytes.NewReader(data)}
+	r := reader{r: bytes.NewReader(data)}
 	frame, err := r.ReadFrame()
 	if err != nil {
 		if frame != nil {

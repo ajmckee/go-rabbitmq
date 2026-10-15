@@ -17,26 +17,26 @@ import (
 ReadFrame reads a frame from an input stream and returns an interface that can be cast into
 one of the following:
 
-   methodFrame
-   PropertiesFrame
-   bodyFrame
-   heartbeatFrame
+	methodFrame
+	PropertiesFrame
+	bodyFrame
+	heartbeatFrame
 
 2.3.5  frame Details
 
 All frames consist of a header (7 octets), a payload of arbitrary size, and a
 'frame-end' octet that detects malformed frames:
 
-  0      1         3             7                  size+7 size+8
-  +------+---------+-------------+  +------------+  +-----------+
-  | type | channel |     size    |  |  payload   |  | frame-end |
-  +------+---------+-------------+  +------------+  +-----------+
-   octet   short         long         size octets       octet
+	0      1         3             7                  size+7 size+8
+	+------+---------+-------------+  +------------+  +-----------+
+	| type | channel |     size    |  |  payload   |  | frame-end |
+	+------+---------+-------------+  +------------+  +-----------+
+	 octet   short         long         size octets       octet
 
 To read a frame, we:
-  1. Read the header and check the frame type and channel.
-	2. Depending on the frame type, we read the payload and process it.
-  3. Read the frame end octet.
+ 1. Read the header and check the frame type and channel.
+ 2. Depending on the frame type, we read the payload and process it.
+ 3. Read the frame end octet.
 
 In realistic implementations where performance is a concern, we would use
 “read-ahead buffering” or
@@ -53,6 +53,15 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 	typ := scratch[0]
 	channel := binary.BigEndian.Uint16(scratch[1:3])
 	size := binary.BigEndian.Uint32(scratch[3:7])
+
+	if r.maxFrameSize != nil {
+		// max-frameHeaderSize is safe from underflow only because maxFrameSize,
+		// whenever nonzero, is always negotiateFrameSize's floor (frameMinSize,
+		// 4096) or higher — see the Store call at Connection.openTune.
+		if max := r.maxFrameSize.Load(); max > 0 && size > (max-frameHeaderSize) {
+			return nil, ErrFrameTooLarge
+		}
+	}
 
 	switch typ {
 	case frameMethod:
@@ -111,7 +120,7 @@ func readLongstr(r io.Reader) (v string, err error) {
 
 	// slices can't be longer than max int32 value
 	if length > (^uint32(0) >> 1) {
-		return
+		return "", ErrSyntax
 	}
 
 	bytes := make([]byte, length)
@@ -131,20 +140,6 @@ func readDecimal(r io.Reader) (v Decimal, err error) {
 	return
 }
 
-func readFloat32(r io.Reader) (v float32, err error) {
-	if err = binary.Read(r, binary.BigEndian, &v); err != nil {
-		return
-	}
-	return
-}
-
-func readFloat64(r io.Reader) (v float64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &v); err != nil {
-		return
-	}
-	return
-}
-
 func readTimestamp(r io.Reader) (v time.Time, err error) {
 	var sec int64
 	if err = binary.Read(r, binary.BigEndian, &sec); err != nil {
@@ -154,7 +149,7 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 }
 
 /*
-'A': []interface{}
+'A': any
 'D': Decimal
 'F': Table
 'I': int32
@@ -166,11 +161,13 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 'd': float64
 'f': float32
 'l': int64
+'i': uint32
 's': int16
+'u': uint16
 't': bool
 'x': []byte
 */
-func readField(r io.Reader) (v interface{}, err error) {
+func readField(r io.Reader) (v any, err error) {
 	var typ byte
 	if err = binary.Read(r, binary.BigEndian, &typ); err != nil {
 		return
@@ -182,7 +179,7 @@ func readField(r io.Reader) (v interface{}, err error) {
 		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
 			return
 		}
-		return (value != 0), nil
+		return value != 0, nil
 
 	case 'B':
 		var value [1]byte
@@ -214,6 +211,20 @@ func readField(r io.Reader) (v interface{}, err error) {
 
 	case 'l':
 		var value int64
+		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
+			return
+		}
+		return value, nil
+
+	case 'u':
+		var value uint16
+		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
+			return
+		}
+		return value, nil
+
+	case 'i':
+		var value uint32
 		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
 			return
 		}
@@ -253,6 +264,9 @@ func readField(r io.Reader) (v interface{}, err error) {
 		if err = binary.Read(r, binary.BigEndian, &len); err != nil {
 			return nil, err
 		}
+		if len < 0 {
+			return nil, ErrSyntax
+		}
 
 		value := make([]byte, len)
 		if _, err = io.ReadFull(r, value); err != nil {
@@ -268,12 +282,12 @@ func readField(r io.Reader) (v interface{}, err error) {
 }
 
 /*
-	Field tables are long strings that contain packed name-value pairs.  The
-	name-value pairs are encoded as short string defining the name, and octet
-	defining the values type and then the value itself.   The valid field types for
-	tables are an extension of the native integer, bit, string, and timestamp
-	types, and are shown in the grammar.  Multi-octet integer fields are always
-	held in network byte order.
+Field tables are long strings that contain packed name-value pairs.  The
+name-value pairs are encoded as short string defining the name, and octet
+defining the values type and then the value itself.   The valid field types for
+tables are an extension of the native integer, bit, string, and timestamp
+types, and are shown in the grammar.  Multi-octet integer fields are always
+held in network byte order.
 */
 func readTable(r io.Reader) (table Table, err error) {
 	var nested bytes.Buffer
@@ -283,13 +297,13 @@ func readTable(r io.Reader) (table Table, err error) {
 		return
 	}
 
-	nested.Write([]byte(str))
+	nested.WriteString(str)
 
 	table = make(Table)
 
 	for nested.Len() > 0 {
 		var key string
-		var value interface{}
+		var value any
 
 		if key, err = readShortstr(&nested); err != nil {
 			return
@@ -305,11 +319,8 @@ func readTable(r io.Reader) (table Table, err error) {
 	return
 }
 
-func readArray(r io.Reader) ([]interface{}, error) {
-	var (
-		size uint32
-		err  error
-	)
+func readArray(r io.Reader) (arr []any, err error) {
+	var size uint32
 
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return nil, err
@@ -317,8 +328,7 @@ func readArray(r io.Reader) ([]interface{}, error) {
 
 	var (
 		lim   = &io.LimitedReader{R: r, N: int64(size)}
-		arr   []interface{}
-		field interface{}
+		field any
 	)
 
 	for {
@@ -344,91 +354,101 @@ func (r *reader) parseHeaderFrame(channel uint16, size uint32) (frame frame, err
 		ChannelId: channel,
 	}
 
-	if err = binary.Read(r.r, binary.BigEndian, &hf.ClassId); err != nil {
+	lim := &io.LimitedReader{R: r.r, N: int64(size)}
+
+	if err = binary.Read(lim, binary.BigEndian, &hf.ClassId); err != nil {
 		return
 	}
 
-	if err = binary.Read(r.r, binary.BigEndian, &hf.weight); err != nil {
+	if err = binary.Read(lim, binary.BigEndian, &hf.weight); err != nil {
 		return
 	}
 
-	if err = binary.Read(r.r, binary.BigEndian, &hf.Size); err != nil {
+	if err = binary.Read(lim, binary.BigEndian, &hf.Size); err != nil {
 		return
 	}
 
 	var flags uint16
 
-	if err = binary.Read(r.r, binary.BigEndian, &flags); err != nil {
+	if err = binary.Read(lim, binary.BigEndian, &flags); err != nil {
 		return
 	}
 
 	if hasProperty(flags, flagContentType) {
-		if hf.Properties.ContentType, err = readShortstr(r.r); err != nil {
+		if hf.Properties.ContentType, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagContentEncoding) {
-		if hf.Properties.ContentEncoding, err = readShortstr(r.r); err != nil {
+		if hf.Properties.ContentEncoding, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagHeaders) {
-		if hf.Properties.Headers, err = readTable(r.r); err != nil {
+		if hf.Properties.Headers, err = readTable(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagDeliveryMode) {
-		if err = binary.Read(r.r, binary.BigEndian, &hf.Properties.DeliveryMode); err != nil {
+		if err = binary.Read(lim, binary.BigEndian, &hf.Properties.DeliveryMode); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagPriority) {
-		if err = binary.Read(r.r, binary.BigEndian, &hf.Properties.Priority); err != nil {
+		if err = binary.Read(lim, binary.BigEndian, &hf.Properties.Priority); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagCorrelationId) {
-		if hf.Properties.CorrelationId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.CorrelationId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagReplyTo) {
-		if hf.Properties.ReplyTo, err = readShortstr(r.r); err != nil {
+		if hf.Properties.ReplyTo, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagExpiration) {
-		if hf.Properties.Expiration, err = readShortstr(r.r); err != nil {
+		if hf.Properties.Expiration, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagMessageId) {
-		if hf.Properties.MessageId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.MessageId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagTimestamp) {
-		if hf.Properties.Timestamp, err = readTimestamp(r.r); err != nil {
+		if hf.Properties.Timestamp, err = readTimestamp(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagType) {
-		if hf.Properties.Type, err = readShortstr(r.r); err != nil {
+		if hf.Properties.Type, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagUserId) {
-		if hf.Properties.UserId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.UserId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagAppId) {
-		if hf.Properties.AppId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.AppId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagReserved1) {
-		if hf.Properties.reserved1, err = readShortstr(r.r); err != nil {
+		if hf.Properties.reserved1, err = readShortstr(lim); err != nil {
+			return
+		}
+	}
+
+	// Drain any bytes remaining in the frame payload that were not consumed
+	// by property parsing (e.g. padding added by other AMQP implementations).
+	if lim.N > 0 {
+		if _, err = io.CopyN(io.Discard, lim, lim.N); err != nil {
 			return
 		}
 	}
@@ -449,7 +469,7 @@ func (r *reader) parseBodyFrame(channel uint16, size uint32) (frame frame, err e
 	return bf, nil
 }
 
-var errHeartbeatPayload = errors.New("Heartbeats should not have a payload")
+var errHeartbeatPayload = errors.New("heartbeats should not have a payload")
 
 func (r *reader) parseHeartbeatFrame(channel uint16, size uint32) (frame frame, err error) {
 	hf := &heartbeatFrame{
